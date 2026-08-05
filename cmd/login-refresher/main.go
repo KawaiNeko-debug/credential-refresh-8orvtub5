@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -65,22 +66,30 @@ func main() {
 			log.Printf("%s %s %s %s", event.Level, event.Type, refreshapi.MaskCustomerCode(event.CustomerCode), event.Message)
 		},
 	})
-	results := refreshAccounts(ctx, runner, group.Accounts, workers)
-	if err := postResults(ctx, client, *managerURL, *jobID, *groupIndex, *token, results); err != nil {
-		log.Fatalf("post results: %v", err)
+	reportResult := func(result refreshapi.AccountResult) error {
+		return postResultWithRetry(ctx, client, *managerURL, *jobID, *groupIndex, *token, result, 5, time.Second)
 	}
+	results, reportErr := refreshAccounts(ctx, runner, group.Accounts, workers, reportResult)
 	status, message := completionStatus(results)
+	if reportErr != nil {
+		status = refreshapi.GroupStatusFailed
+		message = "one or more results could not be reported"
+	}
 	if err := completeGroup(ctx, client, *managerURL, *jobID, *groupIndex, *token, status, message); err != nil {
-		log.Fatalf("complete group: %v", err)
+		log.Fatal("complete group failed")
+	}
+	if reportErr != nil {
+		log.Fatal("real-time result reporting failed")
 	}
 	log.Printf("group %d complete: %d accounts", *groupIndex, len(results))
 }
 
-func refreshAccounts(ctx context.Context, runner *login.Runner, accounts []refreshapi.JobAccount, workers int) []refreshapi.AccountResult {
+func refreshAccounts(ctx context.Context, runner *login.Runner, accounts []refreshapi.JobAccount, workers int, report func(refreshapi.AccountResult) error) ([]refreshapi.AccountResult, error) {
 	if workers <= 0 {
 		workers = 1
 	}
 	results := make([]refreshapi.AccountResult, len(accounts))
+	reportErrors := make([]error, len(accounts))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, workers)
 	for index, account := range accounts {
@@ -91,33 +100,41 @@ func refreshAccounts(ctx context.Context, runner *login.Runner, accounts []refre
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			code := refreshapi.NormalizeCustomerCode(account.CustomerCode)
+			var accountResult refreshapi.AccountResult
 			if code == "" {
-				results[index] = refreshapi.AccountResult{Success: false, Message: "customerCode is required"}
-				return
+				accountResult = refreshapi.AccountResult{Success: false, Message: "customerCode is required"}
+			} else {
+				maskedCode := refreshapi.MaskCustomerCode(code)
+				log.Printf("refreshing %s", maskedCode)
+				result, err := runner.Login(ctx, code, account.Password)
+				if err != nil {
+					log.Printf("refresh %s failed", maskedCode)
+					accountResult = refreshapi.AccountResult{CustomerCode: code, Success: false, Message: err.Error()}
+				} else {
+					voucher := result.CanUseVoucher
+					accountResult = refreshapi.AccountResult{
+						CustomerCode:      result.CustomerCode,
+						Success:           true,
+						Ticket:            result.Ticket,
+						PrimarySession:    result.PrimarySession,
+						GroupSession:      result.GroupSession,
+						MobileAccessToken: result.MobileAccessToken,
+						CanUseVoucher:     &voucher,
+						Message:           "ok",
+					}
+				}
 			}
-			maskedCode := refreshapi.MaskCustomerCode(code)
-			log.Printf("refreshing %s", maskedCode)
-			result, err := runner.Login(ctx, code, account.Password)
-			if err != nil {
-				log.Printf("refresh %s failed", maskedCode)
-				results[index] = refreshapi.AccountResult{CustomerCode: code, Success: false, Message: err.Error()}
-				return
-			}
-			voucher := result.CanUseVoucher
-			results[index] = refreshapi.AccountResult{
-				CustomerCode:      result.CustomerCode,
-				Success:           true,
-				Ticket:            result.Ticket,
-				PrimarySession:    result.PrimarySession,
-				GroupSession:      result.GroupSession,
-				MobileAccessToken: result.MobileAccessToken,
-				CanUseVoucher:     &voucher,
-				Message:           "ok",
+			results[index] = accountResult
+			if report != nil {
+				reportErrors[index] = report(accountResult)
+				if reportErrors[index] != nil {
+					log.Printf("report %s failed after retries", refreshapi.MaskCustomerCode(code))
+				}
 			}
 		}()
 	}
 	wg.Wait()
-	return results
+	return results, errors.Join(reportErrors...)
 }
 
 func completionStatus(results []refreshapi.AccountResult) (string, string) {
@@ -170,6 +187,34 @@ func postResults(ctx context.Context, client *http.Client, baseURL, jobID string
 		return fmt.Errorf("manager returned %d: %s", status, string(responseBody))
 	}
 	return nil
+}
+
+func postResultWithRetry(ctx context.Context, client *http.Client, baseURL, jobID string, groupIndex int, token string, result refreshapi.AccountResult, attempts int, delay time.Duration) error {
+	if attempts <= 0 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := postResults(ctx, client, baseURL, jobID, groupIndex, token, []refreshapi.AccountResult{result}); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt == attempts {
+			break
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if delay < 8*time.Second {
+			delay *= 2
+		}
+	}
+	return lastErr
 }
 
 func completeGroup(ctx context.Context, client *http.Client, baseURL, jobID string, groupIndex int, token, status, message string) error {
