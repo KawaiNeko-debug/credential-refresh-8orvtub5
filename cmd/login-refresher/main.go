@@ -62,7 +62,7 @@ func main() {
 		Headless:     *headless,
 		Workers:      workers,
 		Logger: func(event login.LogEvent) {
-			log.Printf("%s %s %s %s", event.Level, event.Type, event.CustomerCode, event.Message)
+			log.Printf("%s %s %s %s", event.Level, event.Type, refreshapi.MaskCustomerCode(event.CustomerCode), event.Message)
 		},
 	})
 	results := refreshAccounts(ctx, runner, group.Accounts, workers)
@@ -95,10 +95,11 @@ func refreshAccounts(ctx context.Context, runner *login.Runner, accounts []refre
 				results[index] = refreshapi.AccountResult{Success: false, Message: "customerCode is required"}
 				return
 			}
-			log.Printf("refreshing %s", code)
+			maskedCode := refreshapi.MaskCustomerCode(code)
+			log.Printf("refreshing %s", maskedCode)
 			result, err := runner.Login(ctx, code, account.Password)
 			if err != nil {
-				log.Printf("refresh %s failed: %v", code, err)
+				log.Printf("refresh %s failed: %v", maskedCode, err)
 				results[index] = refreshapi.AccountResult{CustomerCode: code, Success: false, Message: err.Error()}
 				return
 			}

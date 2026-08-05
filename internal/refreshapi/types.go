@@ -43,3 +43,11 @@ type GroupCompleteRequest struct {
 func NormalizeCustomerCode(value string) string {
 	return strings.ToUpper(strings.TrimSpace(value))
 }
+
+func MaskCustomerCode(value string) string {
+	code := NormalizeCustomerCode(value)
+	if len(code) <= 4 {
+		return strings.Repeat("*", len(code))
+	}
+	return "****" + code[4:]
+}

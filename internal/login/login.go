@@ -284,7 +284,7 @@ func (r *Runner) runLogin(parent context.Context, account, password string) (Acc
 		return Account{}, fmt.Errorf("生成账号配置失败: %w", err)
 	}
 	if generated.CustomerCode != account {
-		return Account{}, fmt.Errorf("请求客编 %s 与登录后客编 %s 不一致", account, generated.CustomerCode)
+		return Account{}, fmt.Errorf("请求客编 %s 与登录后客编 %s 不一致", maskCustomerCode(account), maskCustomerCode(generated.CustomerCode))
 	}
 	return generated, nil
 }
@@ -748,13 +748,13 @@ func buildGeneratedAccount(ctx context.Context, target Target, password string, 
 		return Account{}, err
 	}
 	if confirmedCode == "" || confirmedCode != customerCode {
-		return Account{}, fmt.Errorf("登录客编 %s 与用户信息客编 %s 不一致", customerCode, confirmedCode)
+		return Account{}, fmt.Errorf("登录客编 %s 与用户信息客编 %s 不一致", maskCustomerCode(customerCode), maskCustomerCode(confirmedCode))
 	}
 	mobileAccessToken := ""
 	if token, mobileCustomerCode, err := requestMobileAccessToken(ctx, client, target, ticket, primarySession); err != nil {
-		fmt.Fprintf(os.Stderr, "mobile access token refresh warning customer=%s error=%v\n", customerCode, err)
+		fmt.Fprintf(os.Stderr, "mobile access token refresh warning customer=%s error=%v\n", maskCustomerCode(customerCode), err)
 	} else if mobileCustomerCode != "" && mobileCustomerCode != customerCode {
-		fmt.Fprintf(os.Stderr, "mobile access token refresh warning customer=%s mobile_customer=%s error=customer_mismatch\n", customerCode, mobileCustomerCode)
+		fmt.Fprintf(os.Stderr, "mobile access token refresh warning customer=%s mobile_customer=%s error=customer_mismatch\n", maskCustomerCode(customerCode), maskCustomerCode(mobileCustomerCode))
 	} else {
 		mobileAccessToken = token
 	}
@@ -768,6 +768,14 @@ func buildGeneratedAccount(ctx context.Context, target Target, password string, 
 		MobileAccessToken: mobileAccessToken,
 		CanUseVoucher:     canUseVoucher,
 	}, nil
+}
+
+func maskCustomerCode(value string) string {
+	code := strings.ToUpper(strings.TrimSpace(value))
+	if len(code) <= 4 {
+		return strings.Repeat("*", len(code))
+	}
+	return "****" + code[4:]
 }
 
 func requestAccountCode(ctx context.Context, client *http.Client, target Target, ticket, primarySession string) (string, string, error) {
