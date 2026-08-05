@@ -752,7 +752,7 @@ func buildGeneratedAccount(ctx context.Context, target Target, password string, 
 	}
 	mobileAccessToken := ""
 	if token, mobileCustomerCode, err := requestMobileAccessToken(ctx, client, target, ticket, primarySession); err != nil {
-		fmt.Fprintf(os.Stderr, "mobile access token refresh warning customer=%s error=%v\n", maskCustomerCode(customerCode), err)
+		fmt.Fprintf(os.Stderr, "mobile access token refresh warning customer=%s error=request_failed\n", maskCustomerCode(customerCode))
 	} else if mobileCustomerCode != "" && mobileCustomerCode != customerCode {
 		fmt.Fprintf(os.Stderr, "mobile access token refresh warning customer=%s mobile_customer=%s error=customer_mismatch\n", maskCustomerCode(customerCode), maskCustomerCode(mobileCustomerCode))
 	} else {

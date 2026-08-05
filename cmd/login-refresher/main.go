@@ -99,7 +99,7 @@ func refreshAccounts(ctx context.Context, runner *login.Runner, accounts []refre
 			log.Printf("refreshing %s", maskedCode)
 			result, err := runner.Login(ctx, code, account.Password)
 			if err != nil {
-				log.Printf("refresh %s failed: %v", maskedCode, err)
+				log.Printf("refresh %s failed", maskedCode)
 				results[index] = refreshapi.AccountResult{CustomerCode: code, Success: false, Message: err.Error()}
 				return
 			}
